@@ -1,0 +1,6 @@
+# Telemetry exports and generated KML (personal flight data)
+# Both cases listed for case-sensitive file systems; MyFlightbook exports use uppercase extensions
+*.csv
+*.CSV
+*.kml
+*.KML

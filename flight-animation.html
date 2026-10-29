@@ -84,6 +84,13 @@
   <label>Trace per flight <span id="traceVal"></span>
     <input id="traceSec" type="range" min="0.3" max="5" step="0.1" value="1.2">
   </label>
+  <label>Small flights
+    <select id="focus">
+      <option value="0">Keep the overview</option>
+      <option value="1">Zoom in if under half the view</option>
+      <option value="2">Zoom in if under a quarter of the view</option>
+    </select>
+  </label>
   <label>Basemap
     <select id="basemap">
       <option value="dark">Dark</option>

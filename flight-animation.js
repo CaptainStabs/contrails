@@ -18,6 +18,7 @@ const W = 1920, H = 1080;
 const PADDING = { top: 140, bottom: 220, left: 140, right: 140 };   // extra bottom room for the date overlay
 const MAX_ZOOM = 11.5;     // closest the camera gets (first flight)
 const END_HOLD = 3;        // seconds to hold the final view
+const FOCUS_CONTEXT = 0.6; // when zoomed in on a small flight, stay this many zoom levels wider than a tight fit
 const ACTIVE = [255, 190, 60], DONE = [90, 200, 255, 210], HEAD = [255, 255, 255];
 
 const BASEMAPS = {
@@ -42,6 +43,7 @@ $('basemap').value = basemapKey;
 $('zoomSec').value = readSetting('fa.zoomSec', $('zoomSec').value);
 $('traceSec').value = readSetting('fa.traceSec', $('traceSec').value);
 $('fps').value = readSetting('fa.fps', $('fps').value);
+$('focus').value = readSetting('fa.focus', $('focus').value);
 
 // ---- Layout: scale the fixed 1920x1080 stage to fit the window ----
 function fitStage() {
@@ -134,7 +136,7 @@ async function loadFiles(fileList) {
 }
 
 // ---- Flights and timeline ----
-let flights = [], cumBounds = [], targets = [], mapReady = false;
+let flights = [], cumBounds = [], targets = [], overview = null, mapReady = false;
 
 function setFlights(list) {
   flights = list;
@@ -152,7 +154,8 @@ function setFlights(list) {
   setControlsDisabled(false);
 }
 
-// Flight i: zoom-out over [i*(Z+T), i*(Z+T)+Z), then trace over [.. +Z, (i+1)*(Z+T)).
+// Flight i: camera move over [i*(Z+T), i*(Z+T)+Z), then trace over [.. +Z, (i+1)*(Z+T)).
+// After the last flight: one more camera move back to the overview of everything, then a hold.
 let Z, T, total = 0;
 function buildTimeline() {
   Z = +$('zoomSec').value; T = +$('traceSec').value;
@@ -162,7 +165,7 @@ function buildTimeline() {
     const t0 = i * (Z + T) + Z;
     f.timestamps = f.rel.map(r => t0 + r * T);
   });
-  total = flights.length ? flights.length * (Z + T) + END_HOLD : 0;
+  total = flights.length ? flights.length * (Z + T) + Z + END_HOLD : 0;
   $('scrub').max = total || 1;
 }
 
@@ -181,19 +184,56 @@ map.on('error', e => setStatus('Map error: ' + (e.error?.message || e.error || '
 let overlay = new deck.MapboxOverlay({ interleaved: true, layers: [] });
 map.addControl(overlay);
 
+function fitCamera(b) {
+  const cam = map.cameraForBounds([[b[0], b[1]], [b[2], b[3]]], { padding: PADDING, maxZoom: MAX_ZOOM });
+  const c = maplibregl.LngLat.convert(cam.center);
+  return { center: [c.lng, c.lat], zoom: cam.zoom };
+}
+
+// Camera per flight. Normally the overview of everything so far (it only ever widens). With the
+// "Small flights" option, a flight that would appear smaller than half/quarter of that overview
+// (1 or 2 zoom levels) gets its own closer view instead, kept a little wider than a tight fit for context.
 function computeTargets() {
-  targets = cumBounds.map(b => {
-    const cam = map.cameraForBounds([[b[0], b[1]], [b[2], b[3]]], { padding: PADDING, maxZoom: MAX_ZOOM });
-    const c = maplibregl.LngLat.convert(cam.center);
-    return { center: [c.lng, c.lat], zoom: cam.zoom };
+  const focusLevels = +$('focus').value;
+  const cum = cumBounds.map(fitCamera);
+  overview = cum[cum.length - 1];
+  targets = flights.map((f, i) => {
+    if (!focusLevels) return cum[i];
+    const own = fitCamera(f.bbox);
+    if (own.zoom - cum[i].zoom < focusLevels) return cum[i];
+    return { center: own.center, zoom: Math.max(cum[i].zoom, own.zoom - FOCUS_CONTEXT) };
   });
 }
 
 const ease = u => u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
-function lerpCamera(a, b, u) {
+// Smooth zoom-and-pan between two cameras (van Wijk & Nuij, the curve maplibre's flyTo uses): long moves
+// between close-up views pull out and back in instead of sliding across the map at high zoom.
+function flyCamera(a, b, u) {
+  if (u <= 0) return a;
+  if (u >= 1) return b;
   const ma = maplibregl.MercatorCoordinate.fromLngLat(a.center), mb = maplibregl.MercatorCoordinate.fromLngLat(b.center);
-  const ll = new maplibregl.MercatorCoordinate(ma.x + (mb.x - ma.x) * u, ma.y + (mb.y - ma.y) * u).toLngLat();
-  return { center: [ll.lng, ll.lat], zoom: a.zoom + (b.zoom - a.zoom) * u };
+  const dx = mb.x - ma.x, dy = mb.y - ma.y, u1 = Math.hypot(dx, dy);
+  // View widths in world units (the world is 512 * 2^zoom pixels wide)
+  const w0 = W / (512 * 2 ** a.zoom), w1 = W / (512 * 2 ** b.zoom);
+  const rho = 1.42, rho2 = rho * rho;
+  let wAt, uAt, S;
+  if (u1 < 1e-12) {
+    // Pure zoom, no pan
+    S = Math.abs(Math.log(w1 / w0)) / rho;
+    const k = w1 < w0 ? -1 : 1;
+    wAt = s => w0 * Math.exp(k * rho * s); uAt = () => 0;
+  } else {
+    const b0 = (w1 * w1 - w0 * w0 + rho2 * rho2 * u1 * u1) / (2 * w0 * rho2 * u1);
+    const b1 = (w1 * w1 - w0 * w0 - rho2 * rho2 * u1 * u1) / (2 * w1 * rho2 * u1);
+    const r0 = Math.log(Math.sqrt(b0 * b0 + 1) - b0), r1 = Math.log(Math.sqrt(b1 * b1 + 1) - b1);
+    S = (r1 - r0) / rho;
+    wAt = s => w0 * Math.cosh(r0) / Math.cosh(rho * s + r0);
+    uAt = s => w0 / rho2 * (Math.cosh(r0) * Math.tanh(rho * s + r0) - Math.sinh(r0));
+  }
+  if (!(S > 0)) return b;
+  const s = u * S, f = u1 < 1e-12 ? 0 : uAt(s) / u1;
+  const ll = new maplibregl.MercatorCoordinate(ma.x + dx * f, ma.y + dy * f).toLngLat();
+  return { center: [ll.lng, ll.lat], zoom: a.zoom + Math.log2(w0 / wAt(s)) };
 }
 
 // Which flight is active at time t, and how far into its zoom/trace phase
@@ -205,8 +245,13 @@ function phaseAt(t) {
 }
 
 function cameraAt(t) {
-  const { i, zoomU } = phaseAt(t);
-  return lerpCamera(targets[Math.max(0, i - 1)], targets[i], ease(zoomU));
+  const ph = phaseAt(t), n = flights.length;
+  if (ph.ended) {
+    // Final move back out to everything
+    const u = Math.min(1, (t - n * (Z + T)) / Z);
+    return flyCamera(targets[n - 1], overview, ease(u));
+  }
+  return flyCamera(targets[Math.max(0, ph.i - 1)], targets[ph.i], ease(ph.zoomU));
 }
 
 function headPosition(f, u) {
@@ -278,7 +323,7 @@ function setPlaying(p) {
   $('play').textContent = p ? 'Pause' : 'Play';
 }
 
-const DATA_CONTROLS = ['play', 'restart', 'record', 'scrub', 'zoomSec', 'traceSec', 'fps'];
+const DATA_CONTROLS = ['play', 'restart', 'record', 'scrub', 'zoomSec', 'traceSec', 'fps', 'focus'];
 function setControlsDisabled(d) {
   for (const id of DATA_CONTROLS) $(id).disabled = d || !flights.length;
   for (const id of ['openFiles', 'openFolder', 'basemap']) $(id).disabled = d;
@@ -296,6 +341,10 @@ for (const id of ['zoomSec', 'traceSec']) {
   };
 }
 $('fps').onchange = e => saveSetting('fa.fps', e.target.value);
+$('focus').onchange = e => {
+  saveSetting('fa.focus', e.target.value);
+  if (mapReady && flights.length) computeTargets();
+};
 $('basemap').onchange = e => {
   basemapKey = e.target.value;
   saveSetting('fa.basemap', basemapKey);
