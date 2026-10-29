@@ -31,6 +31,10 @@
   #hud { position: absolute; left: 56px; bottom: 56px; pointer-events: none; text-shadow: 0 2px 12px rgba(0,0,0,.8); }
   #hud .date { font-size: 64px; font-weight: 700; letter-spacing: -0.5px; }
   #hud .sub { font-size: 30px; color: #cfd3dc; margin-top: 4px; }
+  /* Gradient legend; drawRecordFrame draws the same thing into videos at the same position */
+  #legend { position: absolute; right: 56px; bottom: 48px; width: 360px; pointer-events: none; text-shadow: 0 2px 8px rgba(0,0,0,.8); }
+  #legend .bar { height: 14px; border-radius: 7px; box-shadow: 0 1px 6px rgba(0,0,0,.6); }
+  #legend .labels { display: flex; justify-content: space-between; margin-top: 6px; font-size: 22px; color: #fff; }
 
   #drop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 5; }
   #drop div { padding: 28px 36px; border: 2px dashed rgba(255,255,255,.35); border-radius: 14px; background: rgba(0,0,0,.55); font-size: 18px; text-align: center; color: #cfd3dc; }
@@ -61,6 +65,7 @@
   <div id="map"></div>
   <canvas id="trails"></canvas>
   <div id="hud"><div class="date" id="hudDate"></div><div class="sub" id="hudSub"></div></div>
+  <div id="legend" hidden><div class="bar" id="legendBar"></div><div class="labels"><span id="legendFrom"></span><span id="legendTo"></span></div></div>
 </div>
 
 <div id="drop"><div>Drop your telemetry files here<br><small>.csv and .kml files, or combined-flights.kml</small></div></div>
@@ -108,6 +113,20 @@
       <option value="0">Keep the overview</option>
       <option value="1">Zoom in if under half the view</option>
       <option value="2">Zoom in if under a quarter of the view</option>
+    </select>
+  </label>
+  <label>Colors
+    <select id="colors">
+      <option value="highlight">Highlight the current flight</option>
+      <option value="gradient">Gradient by date (oldest to newest)</option>
+    </select>
+  </label>
+  <label class="seq-only">Gradient step (gradient colors)
+    <select id="gradStep">
+      <option value="0">Spread over all flights (by date)</option>
+      <option value="0.05">1/20 of the gradient per flight</option>
+      <option value="0.1" selected>1/10 of the gradient per flight</option>
+      <option value="0.2">1/5 of the gradient per flight</option>
     </select>
   </label>
   <label>Privacy (for sharing)

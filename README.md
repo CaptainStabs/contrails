@@ -97,6 +97,8 @@ There are two modes:
 | Draw time | All at once: how long the longest flight takes to draw (5–60 s) |
 | Framing | All at once: **Keep everything in frame**, or focus on the area holding 90% (or 75%) of the drawn track so the dense local flying stays large. Focus settings zoom out to everything at the end |
 | Small flights | One at a time: **Keep the overview** only ever zooms out. The **Zoom in** settings move in close on flights that would fill less than half (or a quarter) of the view, so small local flights aren't tiny |
+| Colors | **Highlight the current flight** (orange, with earlier flights in blue), or **Gradient by date**: every flight gets its own color from blue (oldest) through green and yellow to red (newest), with a legend in the bottom-right corner, also drawn into videos |
+| Gradient step | One at a time, gradient colors: how far along the gradient each new flight moves. **Spread over all flights** maps colors to dates. The default **1/10** (or 1/20, 1/5) makes consecutive flights clearly different, running back and forth between blue and red. The date legend is hidden when colors no longer map to dates |
 | Privacy | For sharing videos without revealing where you fly. See [Sharing a video privately](#sharing-a-video-privately) |
 | Basemap | Dark, Light, or Satellite |
 | Video | 1920×1080 at 60 fps, or 30 fps to render faster |
@@ -120,7 +122,7 @@ Set **Privacy** to one of the "On" destinations before recording:
 
 - **Location:** every flight is moved to the chosen region (Great Plains, Mojave Desert, Australian Outback or Scottish Highlands). All flights move together, so their shapes and relative positions stay real.
 - **Orientation:** the flights are also rotated, and possibly mirrored, by a random amount that changes each time the page loads and is never shown. So the original location can't be worked out from the video.
-- **Overlay:** dates and tail numbers are hidden. It shows only "Flight N of total" or the number of flights.
+- **Overlay:** dates and tail numbers are hidden. It shows only "Flight N of total" or the number of flights, and the color legend reads "First" and "Latest".
 - **Your files:** they aren't changed. Set Privacy back to Off to see the real view.
 
 Also:
@@ -157,6 +159,7 @@ All the logic is in `flight-animation.js`:
 | Camera framing and moves | `computeTargets`, `computeTogetherCameras` (All at once), `flyCamera`, `cameraAt` |
 | Drawing tracks and the moving dot | `render` |
 | Date overlay and credits in the video | `drawRecordFrame` |
+| Gradient colors and legend | `gradientColor` (`GRADIENT_FROM`/`GRADIENT_TO` trim the dark ends), `assignColors` (gradient step), `updateLegend`, `drawLegend` |
 | MP4 export | The `record` button handler |
 
 ## Troubleshooting

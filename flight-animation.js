@@ -48,6 +48,26 @@ $('mode').value = readSetting('fa.mode', $('mode').value);
 $('allSec').value = readSetting('fa.allSec', $('allSec').value);
 $('framing').value = readSetting('fa.framing', $('framing').value);
 $('privacy').value = readSetting('fa.privacy', $('privacy').value);
+$('colors').value = readSetting('fa.colors', $('colors').value);
+$('gradStep').value = readSetting('fa.gradStep', $('gradStep').value);
+const gradientOn = () => $('colors').value === 'gradient';
+// One at a time can step further along the gradient per flight than an even spread over all of them
+const gradientStep = () => together() ? 0 : +$('gradStep').value;
+
+// Turbo colormap (Google's polynomial approximation), trimmed to [GRADIENT_FROM, GRADIENT_TO] to skip the
+// near-black ends so every flight stays visible on dark, light and satellite basemaps
+const GRADIENT_FROM = 0.1, GRADIENT_TO = 0.92;
+function gradientColor(u) {
+  const x = GRADIENT_FROM + (GRADIENT_TO - GRADIENT_FROM) * u;
+  const c = v => Math.max(0, Math.min(255, Math.round(v)));
+  return [
+    c(34.61 + x * (1172.33 - x * (10793.56 - x * (33300.12 - x * (38394.49 - x * 14825.05))))),
+    c(23.31 + x * (557.33 + x * (1225.33 - x * (3574.96 - x * (1073.77 + x * 707.56))))),
+    c(27.2 + x * (3211.1 - x * (15327.97 - x * (27814 - x * (22569.18 - x * 6838.66)))))
+  ];
+}
+const GRADIENT_STOPS = Array.from({ length: 9 }, (_, k) => [k / 8, `rgb(${gradientColor(k / 8).join(',')})`]);
+$('legendBar').style.background = `linear-gradient(to right, ${GRADIENT_STOPS.map(([p, c]) => `${c} ${p * 100}%`).join(', ')})`;
 const together = () => $('mode').value === 'together';
 const showMode = () => { document.body.className = 'mode-' + $('mode').value; };
 showMode();
@@ -191,12 +211,28 @@ let flights = [], cumBounds = [], targets = [], overview = null, mapReady = fals
 
 function setFlights(list) {
   flights = list;
+  assignColors();
   buildTimeline();
   refreshGeometry();
+  updateLegend();
   time = 0;
   setPlaying(false);
   $('drop').classList.add('hidden');
   setControlsDisabled(false);
+}
+
+// Gradient color per flight. Step 0 spreads the gradient evenly over all flights by date. A larger step
+// moves that far along the gradient per flight and bounces back at the ends (blue → red → blue …), so
+// consecutive flights differ clearly while the sequence stays smooth.
+let colorVersion = 0;
+function assignColors() {
+  const step = gradientStep(), n = flights.length;
+  flights.forEach((f, i) => {
+    let u = n > 1 ? i / (n - 1) : 0;
+    if (step) { const p = (i * step) % 2; u = p <= 1 ? p : 2 - p; }
+    f.color = gradientColor(u);
+  });
+  colorVersion++;
 }
 
 // Positions as drawn (real or relocated), then the camera framing that depends on them
@@ -398,7 +434,7 @@ function headPosition(f, u) {
 const hud = { date: '', sub: '' };
 function render(t) {
   if (!flights.length || targets.length !== flights.length) return;
-  const all = together();
+  const all = together(), grad = gradientOn();
   const ph = phaseAt(t);
   const active = all || ph.ended ? -1 : ph.i;
   const cam = cameraAt(t);
@@ -410,13 +446,13 @@ function render(t) {
       data: flights,
       getPath: f => f.path,
       getTimestamps: f => f.timestamps,
-      getColor: f => f.index === active ? ACTIVE : DONE,
+      getColor: f => grad ? f.color : f.index === active ? ACTIVE : DONE,
       getWidth: f => f.index === active ? 4 : 2.5,
       widthUnits: 'pixels',
       capRounded: true, jointRounded: true,
       fadeTrail: false, trailLength: 1e9,
       currentTime: t,
-      updateTriggers: { getPath: geometryVersion, getColor: active, getWidth: active, getTimestamps: [total, all] }
+      updateTriggers: { getPath: geometryVersion, getColor: [active, grad, colorVersion], getWidth: active, getTimestamps: [total, all] }
     })
   ];
   if (all) {
@@ -424,17 +460,17 @@ function render(t) {
     const heads = [];
     for (const f of flights) {
       const local = t / (D * f.durMs / longestMs);
-      if (local > 0 && local < 1) heads.push(headPosition(f, local));
+      if (local > 0 && local < 1) heads.push({ p: headPosition(f, local), c: grad ? f.color : ACTIVE });
     }
     layers.push(new deck.ScatterplotLayer({
       id: 'head', data: heads,
-      getPosition: d => d, getFillColor: HEAD, getLineColor: ACTIVE,
+      getPosition: d => d.p, getFillColor: HEAD, getLineColor: d => d.c,
       radiusUnits: 'pixels', getRadius: 5, stroked: true, lineWidthUnits: 'pixels', getLineWidth: 2.5
     }));
   } else if (active >= 0 && ph.traceU > 0 && ph.traceU < 1) {
     layers.push(new deck.ScatterplotLayer({
       id: 'head', data: [headPosition(flights[active], ph.traceU)],
-      getPosition: d => d, getFillColor: HEAD, getLineColor: ACTIVE,
+      getPosition: d => d, getFillColor: HEAD, getLineColor: grad ? flights[active].color : ACTIVE,
       radiusUnits: 'pixels', getRadius: 7, stroked: true, lineWidthUnits: 'pixels', getLineWidth: 3
     }));
   }
@@ -485,7 +521,7 @@ function setPlaying(p) {
   $('play').textContent = p ? 'Pause' : 'Play';
 }
 
-const DATA_CONTROLS = ['play', 'restart', 'record', 'scrub', 'zoomSec', 'traceSec', 'allSec', 'mode', 'framing', 'privacy', 'fps', 'focus'];
+const DATA_CONTROLS = ['play', 'restart', 'record', 'scrub', 'zoomSec', 'traceSec', 'allSec', 'mode', 'framing', 'privacy', 'colors', 'gradStep', 'fps', 'focus'];
 function setControlsDisabled(d) {
   for (const id of DATA_CONTROLS) $(id).disabled = d || !flights.length;
   if (!recording) $('record').disabled = d || !flights.length || !mapReady;
@@ -507,6 +543,16 @@ $('fps').onchange = e => saveSetting('fa.fps', e.target.value);
 $('privacy').onchange = e => {
   saveSetting('fa.privacy', e.target.value);
   if (flights.length) refreshGeometry();
+  updateLegend();
+};
+$('colors').onchange = e => {
+  saveSetting('fa.colors', e.target.value);
+  updateLegend();
+};
+$('gradStep').onchange = e => {
+  saveSetting('fa.gradStep', e.target.value);
+  assignColors();
+  updateLegend();
 };
 $('framing').onchange = e => {
   saveSetting('fa.framing', e.target.value);
@@ -515,6 +561,8 @@ $('framing').onchange = e => {
 $('mode').onchange = e => {
   saveSetting('fa.mode', e.target.value);
   showMode();
+  assignColors();   // gradient step only applies to One at a time
+  updateLegend();
   buildTimeline();
   time = 0;
   setPlaying(false);
@@ -574,9 +622,37 @@ function drawRecordFrame() {
   ctx.fillStyle = '#cfd3dc'; ctx.font = '30px system-ui, "Segoe UI", sans-serif';
   ctx.fillText(hud.sub, 56, H - 56);
   ctx.restore();
+  if (legendShown()) drawLegend(ctx);
   ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = '16px system-ui, sans-serif'; ctx.textAlign = 'right';
   ctx.fillText(BASEMAPS[basemapKey].credit, W - 16, H - 14);
   ctx.textAlign = 'left';
+}
+
+// Same layout as #legend in the page: a 360x14 bar 56px from the right, labels underneath
+function drawLegend(ctx) {
+  const x = W - 56 - 360, y = H - 48 - 48;
+  ctx.save();
+  const g = ctx.createLinearGradient(x, 0, x + 360, 0);
+  for (const [p, c] of GRADIENT_STOPS) g.addColorStop(p, c);
+  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 1;
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.roundRect(x, y, 360, 14, 7); ctx.fill();
+  ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 8;
+  ctx.fillStyle = '#fff'; ctx.font = '22px system-ui, "Segoe UI", sans-serif'; ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left'; ctx.fillText($('legendFrom').textContent, x, y + 14 + 6 + 22);
+  ctx.textAlign = 'right'; ctx.fillText($('legendTo').textContent, x + 360, y + 14 + 6 + 22);
+  ctx.restore();
+}
+
+// Legend labels: first and last flight month, or neutral words when Privacy hides dates. Only shown when
+// colors map to dates (no larger gradient step).
+const legendShown = () => gradientOn() && flights.length > 0 && !gradientStep();
+function updateLegend() {
+  $('legend').hidden = !legendShown();
+  if (!flights.length) return;
+  const month = d => d.toLocaleDateString(undefined, { year: 'numeric', month: 'short' });
+  $('legendFrom').textContent = privacyOn() ? 'First' : month(flights[0].start);
+  $('legendTo').textContent = privacyOn() ? 'Latest' : month(flights[flights.length - 1].start);
 }
 
 // Highest-quality H.264 profile this browser can encode at 1080p
