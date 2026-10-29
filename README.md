@@ -82,7 +82,7 @@ You can load the raw MyFlightbook files, `combined-flights.kml`, or a mix. If th
 There are two modes:
 
 - **One at a time:** flights play in date order. For each one, the camera moves to fit it along with every earlier flight, then the new flight is drawn in orange with a moving dot at its front. Earlier flights stay on the map in blue. The date and "Flight N of total" appear in the lower left. After the last flight, the camera pulls back to show everything.
-- **All at once:** every flight starts drawing at the same moment, each from its own takeoff, at its real relative speed. The longest flight takes the whole draw time and shorter ones finish earlier. A dot marks the front of each flight still drawing. The camera starts close and zooms out as the trails spread, so everything stays in frame. The lower left shows the date range and the number of flights.
+- **All at once:** every flight starts drawing at the same moment, each from its own takeoff, at its real relative speed. The longest flight takes the whole draw time and shorter ones finish earlier. A dot marks the front of each flight still drawing. The camera starts close and zooms out as the trails spread, so everything stays in frame. With a **Framing** focus setting, it instead frames where most of the flying is, letting rare long legs run off the edge, then pulls back to show every trail at the end. The lower left shows the date range and the number of flights.
 
 ### Controls
 
@@ -95,6 +95,7 @@ There are two modes:
 | Zoom-out per flight | One at a time: how long each camera move takes |
 | Trace per flight | One at a time: how long each flight takes to draw |
 | Draw time | All at once: how long the longest flight takes to draw (5–60 s) |
+| Framing | All at once: **Keep everything in frame**, or focus on the area holding 90% (or 75%) of the drawn track so the dense local flying stays large. Focus settings zoom out to everything at the end |
 | Small flights | One at a time: **Keep the overview** only ever zooms out. The **Zoom in** settings move in close on flights that would fill less than half (or a quarter) of the view, so small local flights aren't tiny |
 | Basemap | Dark, Light, or Satellite |
 | Video | 1920×1080 at 60 fps, or 30 fps to render faster |
@@ -131,7 +132,7 @@ All the logic is in `flight-animation.js`:
 
 | To change | Look at |
 |---|---|
-| Colors, line widths, closest zoom, final hold | Constants near the top: `ACTIVE`, `DONE`, `MAX_ZOOM`, `END_HOLD`, `PADDING`, `FOCUS_CONTEXT`, and `TOGETHER_STEPS` (camera keyframes in All at once) |
+| Colors, line widths, closest zoom, final hold | Constants near the top: `ACTIVE`, `DONE`, `MAX_ZOOM`, `END_HOLD`, `PADDING`, `FOCUS_CONTEXT`, and for All at once `TOGETHER_STEPS` (camera keyframes), `TOGETHER_OUTRO` (final pull-back) and `FRAMING_SAMPLE` |
 | Basemaps | `BASEMAPS` |
 | Reading telemetry files | `parseCsv`, `parseKml`, `makeFlight`, `loadFiles` |
 | Timing | `buildTimeline`, `phaseAt` |

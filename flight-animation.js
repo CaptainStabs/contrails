@@ -46,6 +46,7 @@ $('fps').value = readSetting('fa.fps', $('fps').value);
 $('focus').value = readSetting('fa.focus', $('focus').value);
 $('mode').value = readSetting('fa.mode', $('mode').value);
 $('allSec').value = readSetting('fa.allSec', $('allSec').value);
+$('framing').value = readSetting('fa.framing', $('framing').value);
 const together = () => $('mode').value === 'together';
 const showMode = () => { document.body.className = 'mode-' + $('mode').value; };
 showMode();
@@ -175,7 +176,7 @@ function buildTimeline() {
       const span = D * f.durMs / longestMs;
       f.timestamps = f.rel.map(r => r * span);
     });
-    total = flights.length ? D + END_HOLD : 0;
+    total = flights.length ? D + TOGETHER_OUTRO + END_HOLD : 0;
   } else {
     flights.forEach((f, i) => {
       const t0 = i * (Z + T) + Z;
@@ -233,16 +234,25 @@ function computeTargets() {
   });
 }
 
-// All at once: camera keyframes at TOGETHER_STEPS points across the draw time. Keyframe k frames everything
+// All at once: camera keyframes at TOGETHER_STEPS points across the draw time. Keyframe k frames what is
 // drawn by step k+1 (one step ahead), so the camera is already wide enough while it moves toward the next.
-// The drawn area only grows, so the camera only zooms out.
+// "Framing" below 1 frames only the central share of the drawn points (by longitude and latitude), so a few
+// long cross-country legs don't shrink the dense local flying; those legs run off the edge until the
+// final zoom-out to everything. Each box is merged with the previous one, so the camera only zooms out.
 const TOGETHER_STEPS = 48;
-let togetherCams = [];
+const TOGETHER_OUTRO = 1.5;   // seconds to pull back to everything after the draw time
+const FRAMING_SAMPLE = 20000; // max points used for the share-of-flying boxes
+let togetherCams = [], togetherOverview = null;
 function computeTogetherCameras() {
   if (!flights.length) return;
+  const share = +$('framing').value;
   const longest = Math.max(1, ...flights.map(f => f.durMs));
+  const totalPts = flights.reduce((s, f) => s + f.path.length, 0);
+  const stride = Math.max(1, Math.ceil(totalPts / FRAMING_SAMPLE));
   const next = flights.map(() => 0);   // per flight, index of the first point not yet included
-  let b = [Infinity, Infinity, -Infinity, -Infinity];
+  const lons = [], lats = [];
+  let b = [Infinity, Infinity, -Infinity, -Infinity], focus = null, seen = 0;
+  const quantile = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))];
   const boxes = [];
   for (let k = 0; k <= TOGETHER_STEPS; k++) {
     const u = k / TOGETHER_STEPS;
@@ -251,11 +261,21 @@ function computeTogetherCameras() {
       while (next[i] < f.rel.length && f.rel[next[i]] <= local) {
         const [lon, lat] = f.path[next[i]++];
         b = [Math.min(b[0], lon), Math.min(b[1], lat), Math.max(b[2], lon), Math.max(b[3], lat)];
+        if (seen++ % stride === 0) { lons.push(lon); lats.push(lat); }
       }
     });
-    boxes.push(b.slice());
+    let box = b.slice();
+    if (share < 1 && lons.length >= 20) {
+      const lo = (1 - share) / 2, hi = 1 - lo;
+      const sx = lons.slice().sort((p, q) => p - q), sy = lats.slice().sort((p, q) => p - q);
+      const qb = [quantile(sx, lo), quantile(sy, lo), quantile(sx, hi), quantile(sy, hi)];
+      focus = focus ? [Math.min(focus[0], qb[0]), Math.min(focus[1], qb[1]), Math.max(focus[2], qb[2]), Math.max(focus[3], qb[3])] : qb;
+      box = focus.slice();
+    }
+    boxes.push(box);
   }
   togetherCams = boxes.map((_, k) => fitCamera(boxes[Math.min(k + 1, TOGETHER_STEPS)]));
+  togetherOverview = fitCamera(b);
 }
 
 const ease = u => u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
@@ -299,6 +319,10 @@ function phaseAt(t) {
 
 function cameraAt(t) {
   if (together()) {
+    if (t > D) {
+      // Pull back to everything (a no-op when already framing everything)
+      return flyCamera(togetherCams[TOGETHER_STEPS], togetherOverview, ease(Math.min(1, (t - D) / TOGETHER_OUTRO)));
+    }
     const x = Math.min(TOGETHER_STEPS, Math.max(0, t / D * TOGETHER_STEPS)), k = Math.min(TOGETHER_STEPS - 1, Math.floor(x));
     return flyCamera(togetherCams[k], togetherCams[k + 1], x - k);
   }
@@ -404,7 +428,7 @@ function setPlaying(p) {
   $('play').textContent = p ? 'Pause' : 'Play';
 }
 
-const DATA_CONTROLS = ['play', 'restart', 'record', 'scrub', 'zoomSec', 'traceSec', 'allSec', 'mode', 'fps', 'focus'];
+const DATA_CONTROLS = ['play', 'restart', 'record', 'scrub', 'zoomSec', 'traceSec', 'allSec', 'mode', 'framing', 'fps', 'focus'];
 function setControlsDisabled(d) {
   for (const id of DATA_CONTROLS) $(id).disabled = d || !flights.length;
   if (!recording) $('record').disabled = d || !flights.length || !mapReady;
@@ -423,6 +447,10 @@ for (const id of ['zoomSec', 'traceSec', 'allSec']) {
   };
 }
 $('fps').onchange = e => saveSetting('fa.fps', e.target.value);
+$('framing').onchange = e => {
+  saveSetting('fa.framing', e.target.value);
+  if (flights.length) computeTargets();
+};
 $('mode').onchange = e => {
   saveSetting('fa.mode', e.target.value);
   showMode();
