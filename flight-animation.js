@@ -44,6 +44,11 @@ $('zoomSec').value = readSetting('fa.zoomSec', $('zoomSec').value);
 $('traceSec').value = readSetting('fa.traceSec', $('traceSec').value);
 $('fps').value = readSetting('fa.fps', $('fps').value);
 $('focus').value = readSetting('fa.focus', $('focus').value);
+$('mode').value = readSetting('fa.mode', $('mode').value);
+$('allSec').value = readSetting('fa.allSec', $('allSec').value);
+const together = () => $('mode').value === 'together';
+const showMode = () => { document.body.className = 'mode-' + $('mode').value; };
+showMode();
 
 // ---- Layout: scale the fixed 1920x1080 stage to fit the window ----
 function fitStage() {
@@ -105,7 +110,7 @@ function makeFlight({ name, points }) {
   return {
     start: new Date(t0), tail: tail ? tail[0] : '',
     path: pts.map(p => [p[0], p[1]]), rel: pts.map(p => (p[2] - t0) / dur),
-    bbox: [minLon, minLat, maxLon, maxLat], key: t0 + ':' + pts.length, timestamps: null
+    bbox: [minLon, minLat, maxLon, maxLat], key: t0 + ':' + pts.length, durMs: dur, timestamps: null
   };
 }
 
@@ -154,18 +159,30 @@ function setFlights(list) {
   setControlsDisabled(false);
 }
 
-// Flight i: camera move over [i*(Z+T), i*(Z+T)+Z), then trace over [.. +Z, (i+1)*(Z+T)).
+// One at a time: flight i has a camera move over [i*(Z+T), i*(Z+T)+Z), then a trace over [.. +Z, (i+1)*(Z+T)).
 // After the last flight: one more camera move back to the overview of everything, then a hold.
-let Z, T, total = 0;
+// All at once: every flight starts at 0 and draws at its real relative speed, so the longest flight
+// takes the whole draw time D; then a hold.
+let Z, T, D, total = 0, longestMs = 1;
 function buildTimeline() {
-  Z = +$('zoomSec').value; T = +$('traceSec').value;
+  Z = +$('zoomSec').value; T = +$('traceSec').value; D = +$('allSec').value;
   $('zoomVal').textContent = Z.toFixed(1) + ' s';
   $('traceVal').textContent = T.toFixed(1) + ' s';
-  flights.forEach((f, i) => {
-    const t0 = i * (Z + T) + Z;
-    f.timestamps = f.rel.map(r => t0 + r * T);
-  });
-  total = flights.length ? flights.length * (Z + T) + Z + END_HOLD : 0;
+  $('allVal').textContent = D.toFixed(0) + ' s';
+  longestMs = Math.max(1, ...flights.map(f => f.durMs));
+  if (together()) {
+    flights.forEach(f => {
+      const span = D * f.durMs / longestMs;
+      f.timestamps = f.rel.map(r => r * span);
+    });
+    total = flights.length ? D + END_HOLD : 0;
+  } else {
+    flights.forEach((f, i) => {
+      const t0 = i * (Z + T) + Z;
+      f.timestamps = f.rel.map(r => t0 + r * T);
+    });
+    total = flights.length ? flights.length * (Z + T) + Z + END_HOLD : 0;
+  }
   $('scrub').max = total || 1;
 }
 
@@ -204,6 +221,7 @@ function fitCamera(b) {
 // "Small flights" option, a flight that would appear smaller than half/quarter of that overview
 // (1 or 2 zoom levels) gets its own closer view instead, kept a little wider than a tight fit for context.
 function computeTargets() {
+  computeTogetherCameras();
   const focusLevels = +$('focus').value;
   const cum = cumBounds.map(fitCamera);
   overview = cum[cum.length - 1];
@@ -213,6 +231,31 @@ function computeTargets() {
     if (own.zoom - cum[i].zoom < focusLevels) return cum[i];
     return { center: own.center, zoom: Math.max(cum[i].zoom, own.zoom - FOCUS_CONTEXT) };
   });
+}
+
+// All at once: camera keyframes at TOGETHER_STEPS points across the draw time. Keyframe k frames everything
+// drawn by step k+1 (one step ahead), so the camera is already wide enough while it moves toward the next.
+// The drawn area only grows, so the camera only zooms out.
+const TOGETHER_STEPS = 48;
+let togetherCams = [];
+function computeTogetherCameras() {
+  if (!flights.length) return;
+  const longest = Math.max(1, ...flights.map(f => f.durMs));
+  const next = flights.map(() => 0);   // per flight, index of the first point not yet included
+  let b = [Infinity, Infinity, -Infinity, -Infinity];
+  const boxes = [];
+  for (let k = 0; k <= TOGETHER_STEPS; k++) {
+    const u = k / TOGETHER_STEPS;
+    flights.forEach((f, i) => {
+      const local = u * longest / f.durMs;   // how far through its own flight this one is
+      while (next[i] < f.rel.length && f.rel[next[i]] <= local) {
+        const [lon, lat] = f.path[next[i]++];
+        b = [Math.min(b[0], lon), Math.min(b[1], lat), Math.max(b[2], lon), Math.max(b[3], lat)];
+      }
+    });
+    boxes.push(b.slice());
+  }
+  togetherCams = boxes.map((_, k) => fitCamera(boxes[Math.min(k + 1, TOGETHER_STEPS)]));
 }
 
 const ease = u => u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
@@ -255,6 +298,10 @@ function phaseAt(t) {
 }
 
 function cameraAt(t) {
+  if (together()) {
+    const x = Math.min(TOGETHER_STEPS, Math.max(0, t / D * TOGETHER_STEPS)), k = Math.min(TOGETHER_STEPS - 1, Math.floor(x));
+    return flyCamera(togetherCams[k], togetherCams[k + 1], x - k);
+  }
   const ph = phaseAt(t), n = flights.length;
   if (ph.ended) {
     // Final move back out to everything
@@ -276,8 +323,9 @@ function headPosition(f, u) {
 const hud = { date: '', sub: '' };
 function render(t) {
   if (!flights.length || targets.length !== flights.length) return;
+  const all = together();
   const ph = phaseAt(t);
-  const active = ph.ended ? -1 : ph.i;
+  const active = all || ph.ended ? -1 : ph.i;
   const cam = cameraAt(t);
   map.jumpTo(cam);
 
@@ -293,10 +341,22 @@ function render(t) {
       capRounded: true, jointRounded: true,
       fadeTrail: false, trailLength: 1e9,
       currentTime: t,
-      updateTriggers: { getColor: active, getWidth: active, getTimestamps: total }
+      updateTriggers: { getColor: active, getWidth: active, getTimestamps: [total, all] }
     })
   ];
-  if (active >= 0 && ph.traceU > 0 && ph.traceU < 1) {
+  if (all) {
+    // A dot at the front of every flight that is still drawing
+    const heads = [];
+    for (const f of flights) {
+      const local = t / (D * f.durMs / longestMs);
+      if (local > 0 && local < 1) heads.push(headPosition(f, local));
+    }
+    layers.push(new deck.ScatterplotLayer({
+      id: 'head', data: heads,
+      getPosition: d => d, getFillColor: HEAD, getLineColor: ACTIVE,
+      radiusUnits: 'pixels', getRadius: 5, stroked: true, lineWidthUnits: 'pixels', getLineWidth: 2.5
+    }));
+  } else if (active >= 0 && ph.traceU > 0 && ph.traceU < 1) {
     layers.push(new deck.ScatterplotLayer({
       id: 'head', data: [headPosition(flights[active], ph.traceU)],
       getPosition: d => d, getFillColor: HEAD, getLineColor: ACTIVE,
@@ -309,10 +369,16 @@ function render(t) {
     viewState: { longitude: cam.center[0], latitude: cam.center[1], zoom: cam.zoom, pitch: 0, bearing: 0 }
   });
 
-  const f = flights[ph.ended ? flights.length - 1 : ph.i];
-  const shown = ph.ended ? flights.length : ph.i + 1;
-  hud.date = f.start.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-  hud.sub = `Flight ${shown} of ${flights.length}` + (f.tail ? ` · ${f.tail}` : '');
+  const fmt = d => d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  if (all) {
+    hud.date = `${fmt(flights[0].start)} – ${fmt(flights[flights.length - 1].start)}`;
+    hud.sub = `${flights.length} flights`;
+  } else {
+    const f = flights[ph.ended ? flights.length - 1 : ph.i];
+    const shown = ph.ended ? flights.length : ph.i + 1;
+    hud.date = fmt(f.start);
+    hud.sub = `Flight ${shown} of ${flights.length}` + (f.tail ? ` · ${f.tail}` : '');
+  }
   $('hudDate').textContent = hud.date;
   $('hudSub').textContent = hud.sub;
   $('clock').textContent = `${t.toFixed(1)} / ${total.toFixed(0)} s`;
@@ -338,7 +404,7 @@ function setPlaying(p) {
   $('play').textContent = p ? 'Pause' : 'Play';
 }
 
-const DATA_CONTROLS = ['play', 'restart', 'record', 'scrub', 'zoomSec', 'traceSec', 'fps', 'focus'];
+const DATA_CONTROLS = ['play', 'restart', 'record', 'scrub', 'zoomSec', 'traceSec', 'allSec', 'mode', 'fps', 'focus'];
 function setControlsDisabled(d) {
   for (const id of DATA_CONTROLS) $(id).disabled = d || !flights.length;
   if (!recording) $('record').disabled = d || !flights.length || !mapReady;
@@ -348,7 +414,7 @@ function setControlsDisabled(d) {
 $('play').onclick = () => { if (time >= total) time = 0; setPlaying(!playing); };
 $('restart').onclick = () => { time = 0; render(0); };
 $('scrub').oninput = e => { time = +e.target.value; };
-for (const id of ['zoomSec', 'traceSec']) {
+for (const id of ['zoomSec', 'traceSec', 'allSec']) {
   $(id).oninput = () => {
     const u = total ? time / total : 0;
     saveSetting('fa.' + id, $(id).value);
@@ -357,6 +423,13 @@ for (const id of ['zoomSec', 'traceSec']) {
   };
 }
 $('fps').onchange = e => saveSetting('fa.fps', e.target.value);
+$('mode').onchange = e => {
+  saveSetting('fa.mode', e.target.value);
+  showMode();
+  buildTimeline();
+  time = 0;
+  setPlaying(false);
+};
 $('focus').onchange = e => {
   saveSetting('fa.focus', e.target.value);
   if (flights.length) computeTargets();

@@ -52,6 +52,7 @@
   #panel.collapsed > :not(.head) { display: none; }
   #panel .head { display: flex; justify-content: space-between; align-items: baseline; }
   #panel .head button { flex: none; padding: 2px 8px; font-size: 12px; }
+  body.mode-sequence #panel .all-only, body.mode-together #panel .seq-only { display: none; }
   .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 </style>
 </head>
@@ -80,13 +81,22 @@
   <label>Timeline <span id="clock">0.0 s</span>
     <input id="scrub" type="range" min="0" max="1" step="0.01" value="0">
   </label>
-  <label>Zoom-out per flight <span id="zoomVal"></span>
+  <label>Mode
+    <select id="mode">
+      <option value="sequence">One at a time</option>
+      <option value="together">All at once</option>
+    </select>
+  </label>
+  <label class="seq-only">Zoom-out per flight <span id="zoomVal"></span>
     <input id="zoomSec" type="range" min="0.2" max="3" step="0.1" value="0.8">
   </label>
-  <label>Trace per flight <span id="traceVal"></span>
+  <label class="seq-only">Trace per flight <span id="traceVal"></span>
     <input id="traceSec" type="range" min="0.3" max="5" step="0.1" value="1.2">
   </label>
-  <label>Small flights
+  <label class="all-only">Draw time <span id="allVal"></span>
+    <input id="allSec" type="range" min="5" max="60" step="1" value="15">
+  </label>
+  <label class="seq-only">Small flights
     <select id="focus">
       <option value="0">Keep the overview</option>
       <option value="1">Zoom in if under half the view</option>

@@ -79,7 +79,10 @@ You can load the raw MyFlightbook files, `combined-flights.kml`, or a mix. If th
 
 ### What it shows
 
-Flights play in date order. For each one, the camera moves to fit it along with every earlier flight, then the new flight is drawn in orange with a moving dot at its front. Earlier flights stay on the map in blue. The date and "Flight N of total" appear in the lower left. After the last flight, the camera pulls back to show everything.
+There are two modes:
+
+- **One at a time:** flights play in date order. For each one, the camera moves to fit it along with every earlier flight, then the new flight is drawn in orange with a moving dot at its front. Earlier flights stay on the map in blue. The date and "Flight N of total" appear in the lower left. After the last flight, the camera pulls back to show everything.
+- **All at once:** every flight starts drawing at the same moment, each from its own takeoff, at its real relative speed. The longest flight takes the whole draw time and shorter ones finish earlier. A dot marks the front of each flight still drawing. The camera starts close and zooms out as the trails spread, so everything stays in frame. The lower left shows the date range and the number of flights.
 
 ### Controls
 
@@ -88,9 +91,11 @@ Flights play in date order. For each one, the camera moves to fit it along with 
 | Play / Restart | Play or pause (also **Space**), or jump back to the start |
 | Record | Export the animation as `flight-history.mp4` (see below) |
 | Timeline | Jump to any point |
-| Zoom-out per flight | How long each camera move takes |
-| Trace per flight | How long each flight takes to draw |
-| Small flights | **Keep the overview** only ever zooms out. The **Zoom in** settings move in close on flights that would fill less than half (or a quarter) of the view, so small local flights aren't tiny |
+| Mode | **One at a time** or **All at once** (see above) |
+| Zoom-out per flight | One at a time: how long each camera move takes |
+| Trace per flight | One at a time: how long each flight takes to draw |
+| Draw time | All at once: how long the longest flight takes to draw (5–60 s) |
+| Small flights | One at a time: **Keep the overview** only ever zooms out. The **Zoom in** settings move in close on flights that would fill less than half (or a quarter) of the view, so small local flights aren't tiny |
 | Basemap | Dark, Light, or Satellite |
 | Video | 1920×1080 at 60 fps, or 30 fps to render faster |
 | Hide / **H** | Hide the panel |
@@ -126,11 +131,11 @@ All the logic is in `flight-animation.js`:
 
 | To change | Look at |
 |---|---|
-| Colors, line widths, closest zoom, final hold | Constants near the top: `ACTIVE`, `DONE`, `MAX_ZOOM`, `END_HOLD`, `PADDING`, `FOCUS_CONTEXT` |
+| Colors, line widths, closest zoom, final hold | Constants near the top: `ACTIVE`, `DONE`, `MAX_ZOOM`, `END_HOLD`, `PADDING`, `FOCUS_CONTEXT`, and `TOGETHER_STEPS` (camera keyframes in All at once) |
 | Basemaps | `BASEMAPS` |
 | Reading telemetry files | `parseCsv`, `parseKml`, `makeFlight`, `loadFiles` |
 | Timing | `buildTimeline`, `phaseAt` |
-| Camera framing and moves | `computeTargets`, `flyCamera`, `cameraAt` |
+| Camera framing and moves | `computeTargets`, `computeTogetherCameras` (All at once), `flyCamera`, `cameraAt` |
 | Drawing tracks and the moving dot | `render` |
 | Date overlay and credits in the video | `drawRecordFrame` |
 | MP4 export | The `record` button handler |
