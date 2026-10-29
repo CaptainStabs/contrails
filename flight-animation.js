@@ -147,7 +147,7 @@ function setFlights(list) {
     cumBounds.push(p ? [Math.min(p[0], b[0]), Math.min(p[1], b[1]), Math.max(p[2], b[2]), Math.max(p[3], b[3])] : b.slice());
   });
   buildTimeline();
-  if (mapReady) computeTargets();   // otherwise done on the map's load event
+  computeTargets();   // only needs the map's size, not its style
   time = 0;
   setPlaying(false);
   $('drop').classList.add('hidden');
@@ -181,8 +181,18 @@ const map = new maplibregl.Map({
   canvasContextAttributes: { preserveDrawingBuffer: true, antialias: true }
 });
 map.on('error', e => setStatus('Map error: ' + (e.error?.message || e.error || 'unknown') + ' (map tiles need an internet connection)'));
-let overlay = new deck.MapboxOverlay({ interleaved: true, layers: [] });
-map.addControl(overlay);
+// Trails are drawn by a separate deck.gl instance on its own transparent canvas above the map, kept in sync
+// by giving it the same camera each frame. Unlike drawing inside the map's WebGL pass (MapboxOverlay
+// interleaved mode), this keeps the trails independent of the basemap's GL state and of style changes,
+// and lets the recorder update and draw them on demand before compositing the two canvases.
+const trails = new deck.Deck({
+  canvas: $('trails'),
+  width: W, height: H,
+  useDevicePixels: false,
+  controller: false,
+  viewState: { longitude: -95, latitude: 38, zoom: 3.5, pitch: 0, bearing: 0 },
+  layers: []
+});
 
 function fitCamera(b) {
   const cam = map.cameraForBounds([[b[0], b[1]], [b[2], b[3]]], { padding: PADDING, maxZoom: MAX_ZOOM });
@@ -268,7 +278,8 @@ function render(t) {
   if (!flights.length || targets.length !== flights.length) return;
   const ph = phaseAt(t);
   const active = ph.ended ? -1 : ph.i;
-  map.jumpTo(cameraAt(t));
+  const cam = cameraAt(t);
+  map.jumpTo(cam);
 
   const layers = [
     new deck.TripsLayer({
@@ -292,7 +303,11 @@ function render(t) {
       radiusUnits: 'pixels', getRadius: 7, stroked: true, lineWidthUnits: 'pixels', getLineWidth: 3
     }));
   }
-  overlay.setProps({ layers });
+  // Same camera as the map (deck.gl and MapLibre share the 512px-tile Web Mercator zoom scale)
+  trails.setProps({
+    layers,
+    viewState: { longitude: cam.center[0], latitude: cam.center[1], zoom: cam.zoom, pitch: 0, bearing: 0 }
+  });
 
   const f = flights[ph.ended ? flights.length - 1 : ph.i];
   const shown = ph.ended ? flights.length : ph.i + 1;
@@ -326,6 +341,7 @@ function setPlaying(p) {
 const DATA_CONTROLS = ['play', 'restart', 'record', 'scrub', 'zoomSec', 'traceSec', 'fps', 'focus'];
 function setControlsDisabled(d) {
   for (const id of DATA_CONTROLS) $(id).disabled = d || !flights.length;
+  if (!recording) $('record').disabled = d || !flights.length || !mapReady;
   for (const id of ['openFiles', 'openFolder', 'basemap']) $(id).disabled = d;
 }
 
@@ -343,19 +359,12 @@ for (const id of ['zoomSec', 'traceSec']) {
 $('fps').onchange = e => saveSetting('fa.fps', e.target.value);
 $('focus').onchange = e => {
   saveSetting('fa.focus', e.target.value);
-  if (mapReady && flights.length) computeTargets();
+  if (flights.length) computeTargets();
 };
 $('basemap').onchange = e => {
   basemapKey = e.target.value;
   saveSetting('fa.basemap', basemapKey);
-  // Re-attach the deck.gl overlay once the new style is in place. The listener goes first because an
-  // inline style (satellite) can finish loading inside setStyle().
-  map.removeControl(overlay);
-  map.once('style.load', () => {
-    overlay = new deck.MapboxOverlay({ interleaved: true, layers: [] });
-    map.addControl(overlay);
-  });
-  map.setStyle(BASEMAPS[basemapKey].style);
+  map.setStyle(BASEMAPS[basemapKey].style);   // trails are on their own canvas, so they're unaffected
 };
 $('collapse').onclick = () => {
   const c = $('panel').classList.toggle('collapsed');
@@ -394,6 +403,7 @@ const recCtx = recCanvas.getContext('2d');
 function drawRecordFrame() {
   const ctx = recCtx;
   ctx.drawImage(map.getCanvas(), 0, 0, W, H);
+  ctx.drawImage($('trails'), 0, 0, W, H);
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 2;
   ctx.fillStyle = '#fff'; ctx.textBaseline = 'alphabetic';
@@ -423,7 +433,7 @@ const yieldNow = () => new Promise(res => { const ch = new MessageChannel(); ch.
 async function renderWhenTilesLoaded() {
   map.redraw();
   const t0 = performance.now();
-  while (!map.areTilesLoaded() && performance.now() - t0 < 10000) {
+  while (!(map.isStyleLoaded() && map.areTilesLoaded()) && performance.now() - t0 < 10000) {
     await new Promise(res => { const done = () => { map.off('data', done); clearTimeout(to); res(); }; const to = setTimeout(done, 100); map.on('data', done); });
     map.redraw();
   }
@@ -436,6 +446,7 @@ $('record').onclick = async () => {
   const fps = +$('fps').value;
   const cfg = await pickCodec(fps);
   if (!cfg) { setStatus('This browser cannot encode 1080p H.264 video.'); return; }
+  if (!trails.isInitialized) { setStatus('Still starting up, try again in a moment.'); return; }
 
   setPlaying(false);
   setControlsDisabled(true);
@@ -459,6 +470,10 @@ $('record').onclick = async () => {
       time = Math.min(total, k / fps);
       render(time);
       await renderWhenTilesLoaded();
+      // deck.gl only applies new layers (setProps) in its own requestAnimationFrame loop, which barely runs
+      // while recording, so apply them and draw now. Otherwise frames show stale trails.
+      trails.layerManager.updateLayers();
+      trails.redraw('record');
       drawRecordFrame();
       const vf = new VideoFrame(recCanvas, { timestamp: Math.round(k * 1e6 / fps), duration: Math.round(1e6 / fps) });
       encoder.encode(vf, { keyFrame: k % (fps * 2) === 0 });
@@ -492,9 +507,7 @@ $('record').onclick = async () => {
 buildTimeline();
 setControlsDisabled(false);
 setStatus('Open or drop your telemetry files (.csv / .kml, or combined-flights.kml).');
-map.on('load', () => {
-  mapReady = true;
-  if (flights.length) computeTargets();
-  requestAnimationFrame(now => { lastFrame = now; requestAnimationFrame(frame); });
-});
+// Rendering doesn't wait for the map's load event; only recording does (see setControlsDisabled)
+map.on('load', () => { mapReady = true; setControlsDisabled(false); });
+requestAnimationFrame(now => { lastFrame = now; requestAnimationFrame(frame); });
 })();

@@ -27,6 +27,7 @@
   /* The map is always rendered at exactly 1920x1080 (the video size) and scaled to fit the window */
   #stage { position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px; transform-origin: center; }
   #map { position: absolute; inset: 0; }
+  #trails { position: absolute; inset: 0; width: 1920px; height: 1080px; pointer-events: none; }
   #hud { position: absolute; left: 56px; bottom: 56px; pointer-events: none; text-shadow: 0 2px 12px rgba(0,0,0,.8); }
   #hud .date { font-size: 64px; font-weight: 700; letter-spacing: -0.5px; }
   #hud .sub { font-size: 30px; color: #cfd3dc; margin-top: 4px; }
@@ -57,6 +58,7 @@
 <body>
 <div id="stage">
   <div id="map"></div>
+  <canvas id="trails"></canvas>
   <div id="hud"><div class="date" id="hudDate"></div><div class="sub" id="hudSub"></div></div>
 </div>
 
