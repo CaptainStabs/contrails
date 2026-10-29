@@ -47,6 +47,7 @@ $('focus').value = readSetting('fa.focus', $('focus').value);
 $('mode').value = readSetting('fa.mode', $('mode').value);
 $('allSec').value = readSetting('fa.allSec', $('allSec').value);
 $('framing').value = readSetting('fa.framing', $('framing').value);
+$('privacy').value = readSetting('fa.privacy', $('privacy').value);
 const together = () => $('mode').value === 'together';
 const showMode = () => { document.body.className = 'mode-' + $('mode').value; };
 showMode();
@@ -98,21 +99,65 @@ function parseKml(text) {
   return flights;
 }
 
+function bboxOf(path) {
+  let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+  for (const [lon, lat] of path) {
+    if (lon < minLon) minLon = lon; if (lon > maxLon) maxLon = lon;
+    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
+  }
+  return [minLon, minLat, maxLon, maxLat];
+}
+
 function makeFlight({ name, points }) {
   const pts = points.filter(p => !(p[0] === 0 && p[1] === 0));   // GPS dropouts
   if (pts.length < 2) return null;
   const t0 = pts[0][2], dur = (pts[pts.length - 1][2] - t0) || 1;
-  let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
-  for (const [lon, lat] of pts) {
-    if (lon < minLon) minLon = lon; if (lon > maxLon) maxLon = lon;
-    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
-  }
   const tail = (name || '').match(/\bN[0-9][0-9A-Z]{0,4}\b/);   // US registration, if the name has one
+  const path = pts.map(p => [p[0], p[1]]);
   return {
     start: new Date(t0), tail: tail ? tail[0] : '',
-    path: pts.map(p => [p[0], p[1]]), rel: pts.map(p => (p[2] - t0) / dur),
-    bbox: [minLon, minLat, maxLon, maxLat], key: t0 + ':' + pts.length, durMs: dur, timestamps: null
+    origPath: path, path, rel: pts.map(p => (p[2] - t0) / dur),
+    bbox: bboxOf(path), key: t0 + ':' + pts.length, durMs: dur, timestamps: null
   };
+}
+
+// ---- Privacy ----
+// Moves every flight to a stand-in region so videos don't reveal where you fly. All flights get the same
+// rotation (and maybe a mirror flip) around their common center, so shapes and relative positions stay
+// real. The rotation is random per page load and never shown, so the original location can't be worked
+// back from a video. Dates and tail numbers are hidden in the overlay (see render).
+const PRIVACY_PLACES = {
+  plains: [-100.0, 41.5],     // Great Plains, Nebraska
+  mojave: [-116.3, 35.1],     // Mojave Desert, California
+  outback: [133.5, -24.5],    // Outback, Australia
+  highlands: [-4.6, 57.1]     // Scottish Highlands
+};
+const privacyAngle = Math.random() * 2 * Math.PI, privacyMirror = Math.random() < 0.5 ? -1 : 1;
+const privacyOn = () => !!PRIVACY_PLACES[$('privacy').value];
+
+function applyPrivacy() {
+  const dest = PRIVACY_PLACES[$('privacy').value];
+  if (!dest) {
+    flights.forEach(f => { f.path = f.origPath; });
+  } else {
+    let b = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const f of flights) {
+      const o = bboxOf(f.origPath);
+      b = [Math.min(b[0], o[0]), Math.min(b[1], o[1]), Math.max(b[2], o[2]), Math.max(b[3], o[3])];
+    }
+    // Work in local units where a degree of longitude is scaled to its true width, so shapes don't stretch
+    const lon0 = (b[0] + b[2]) / 2, lat0 = (b[1] + b[3]) / 2;
+    const k0 = Math.cos(lat0 * Math.PI / 180), k1 = Math.cos(dest[1] * Math.PI / 180);
+    const c = Math.cos(privacyAngle), s = Math.sin(privacyAngle);
+    flights.forEach(f => {
+      f.path = f.origPath.map(([lon, lat]) => {
+        const x = (lon - lon0) * k0 * privacyMirror, y = lat - lat0;
+        return [dest[0] + (x * c - y * s) / k1, dest[1] + (x * s + y * c)];
+      });
+    });
+  }
+  flights.forEach(f => { f.bbox = bboxOf(f.path); });
+  geometryVersion++;
 }
 
 async function loadFiles(fileList) {
@@ -142,22 +187,28 @@ async function loadFiles(fileList) {
 }
 
 // ---- Flights and timeline ----
-let flights = [], cumBounds = [], targets = [], overview = null, mapReady = false;
+let flights = [], cumBounds = [], targets = [], overview = null, mapReady = false, geometryVersion = 0;
 
 function setFlights(list) {
   flights = list;
+  buildTimeline();
+  refreshGeometry();
+  time = 0;
+  setPlaying(false);
+  $('drop').classList.add('hidden');
+  setControlsDisabled(false);
+}
+
+// Positions as drawn (real or relocated), then the camera framing that depends on them
+function refreshGeometry() {
+  applyPrivacy();
   // Cumulative bounds: everything up to and including flight i. These only grow, so the camera only zooms out.
   cumBounds = [];
   flights.forEach((f, i) => {
     const b = f.bbox, p = cumBounds[i - 1];
     cumBounds.push(p ? [Math.min(p[0], b[0]), Math.min(p[1], b[1]), Math.max(p[2], b[2]), Math.max(p[3], b[3])] : b.slice());
   });
-  buildTimeline();
   computeTargets();   // only needs the map's size, not its style
-  time = 0;
-  setPlaying(false);
-  $('drop').classList.add('hidden');
-  setControlsDisabled(false);
 }
 
 // One at a time: flight i has a camera move over [i*(Z+T), i*(Z+T)+Z), then a trace over [.. +Z, (i+1)*(Z+T)).
@@ -365,7 +416,7 @@ function render(t) {
       capRounded: true, jointRounded: true,
       fadeTrail: false, trailLength: 1e9,
       currentTime: t,
-      updateTriggers: { getColor: active, getWidth: active, getTimestamps: [total, all] }
+      updateTriggers: { getPath: geometryVersion, getColor: active, getWidth: active, getTimestamps: [total, all] }
     })
   ];
   if (all) {
@@ -394,14 +445,20 @@ function render(t) {
   });
 
   const fmt = d => d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  const priv = privacyOn();   // no dates or tail numbers
   if (all) {
-    hud.date = `${fmt(flights[0].start)} – ${fmt(flights[flights.length - 1].start)}`;
-    hud.sub = `${flights.length} flights`;
+    hud.date = priv ? `${flights.length} flights` : `${fmt(flights[0].start)} – ${fmt(flights[flights.length - 1].start)}`;
+    hud.sub = priv ? '' : `${flights.length} flights`;
   } else {
     const f = flights[ph.ended ? flights.length - 1 : ph.i];
     const shown = ph.ended ? flights.length : ph.i + 1;
-    hud.date = fmt(f.start);
-    hud.sub = `Flight ${shown} of ${flights.length}` + (f.tail ? ` · ${f.tail}` : '');
+    if (priv) {
+      hud.date = `Flight ${shown}`;
+      hud.sub = `of ${flights.length}`;
+    } else {
+      hud.date = fmt(f.start);
+      hud.sub = `Flight ${shown} of ${flights.length}` + (f.tail ? ` · ${f.tail}` : '');
+    }
   }
   $('hudDate').textContent = hud.date;
   $('hudSub').textContent = hud.sub;
@@ -428,7 +485,7 @@ function setPlaying(p) {
   $('play').textContent = p ? 'Pause' : 'Play';
 }
 
-const DATA_CONTROLS = ['play', 'restart', 'record', 'scrub', 'zoomSec', 'traceSec', 'allSec', 'mode', 'framing', 'fps', 'focus'];
+const DATA_CONTROLS = ['play', 'restart', 'record', 'scrub', 'zoomSec', 'traceSec', 'allSec', 'mode', 'framing', 'privacy', 'fps', 'focus'];
 function setControlsDisabled(d) {
   for (const id of DATA_CONTROLS) $(id).disabled = d || !flights.length;
   if (!recording) $('record').disabled = d || !flights.length || !mapReady;
@@ -447,6 +504,10 @@ for (const id of ['zoomSec', 'traceSec', 'allSec']) {
   };
 }
 $('fps').onchange = e => saveSetting('fa.fps', e.target.value);
+$('privacy').onchange = e => {
+  saveSetting('fa.privacy', e.target.value);
+  if (flights.length) refreshGeometry();
+};
 $('framing').onchange = e => {
   saveSetting('fa.framing', e.target.value);
   if (flights.length) computeTargets();

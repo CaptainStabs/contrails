@@ -97,6 +97,7 @@ There are two modes:
 | Draw time | All at once: how long the longest flight takes to draw (5–60 s) |
 | Framing | All at once: **Keep everything in frame**, or focus on the area holding 90% (or 75%) of the drawn track so the dense local flying stays large. Focus settings zoom out to everything at the end |
 | Small flights | One at a time: **Keep the overview** only ever zooms out. The **Zoom in** settings move in close on flights that would fill less than half (or a quarter) of the view, so small local flights aren't tiny |
+| Privacy | For sharing videos without revealing where you fly. See [Sharing a video privately](#sharing-a-video-privately) |
 | Basemap | Dark, Light, or Satellite |
 | Video | 1920×1080 at 60 fps, or 30 fps to render faster |
 | Hide / **H** | Hide the panel |
@@ -110,6 +111,22 @@ The map always renders at 1920×1080, the video size, and is scaled to fit the w
 **Record** renders the animation frame by frame rather than capturing the screen live. Each frame waits for its map tiles to load before it is encoded, so the video comes out smooth and complete even on a slow machine. When it finishes, the browser downloads `flight-history.mp4`. **Cancel** stops it partway.
 
 Expect a few minutes of rendering for the full animation, and a file of roughly 150–300 MB at 60 fps. This needs a browser with WebCodecs video encoding (current Chrome or Edge).
+
+### Sharing a video privately
+
+A video of real flights can identify you: the trails cluster on your home airport, the map shows exactly where that is, the overlay shows dates and your tail number (US registrations are public, with the owner's name and address), and dated tracks can be matched against public ADS-B history.
+
+Set **Privacy** to one of the "On" destinations before recording:
+
+- **Location:** every flight is moved to the chosen region (Great Plains, Mojave Desert, Australian Outback or Scottish Highlands). All flights move together, so their shapes and relative positions stay real.
+- **Orientation:** the flights are also rotated, and possibly mirrored, by a random amount that changes each time the page loads and is never shown. So the original location can't be worked out from the video.
+- **Overlay:** dates and tail numbers are hidden. It shows only "Flight N of total" or the number of flights.
+- **Your files:** they aren't changed. Set Privacy back to Off to see the real view.
+
+Also:
+
+- **Use Record, not a screen recorder.** Record captures only the map and overlay, never the panel. The MP4 contains no location metadata.
+- **Don't publish a private video next to a real one** of the same flights. Comparing the two would reveal the offset.
 
 ### Requirements and credits
 
@@ -135,6 +152,7 @@ All the logic is in `flight-animation.js`:
 | Colors, line widths, closest zoom, final hold | Constants near the top: `ACTIVE`, `DONE`, `MAX_ZOOM`, `END_HOLD`, `PADDING`, `FOCUS_CONTEXT`, and for All at once `TOGETHER_STEPS` (camera keyframes), `TOGETHER_OUTRO` (final pull-back) and `FRAMING_SAMPLE` |
 | Basemaps | `BASEMAPS` |
 | Reading telemetry files | `parseCsv`, `parseKml`, `makeFlight`, `loadFiles` |
+| Privacy destinations and relocation | `PRIVACY_PLACES`, `applyPrivacy` |
 | Timing | `buildTimeline`, `phaseAt` |
 | Camera framing and moves | `computeTargets`, `computeTogetherCameras` (All at once), `flyCamera`, `cameraAt` |
 | Drawing tracks and the moving dot | `render` |
