@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flight History Animation</title>
+<!--
+  Libraries are kept in lib/ so the page works when opened straight from disk:
+    maplibre-gl 5.24.0  https://unpkg.com/maplibre-gl@5.24.0/dist/
+    deck.gl 9.3.11      https://unpkg.com/deck.gl@9.3.11/dist.min.js
+    mp4-muxer 5.2.2     https://unpkg.com/mp4-muxer@5.2.2/build/mp4-muxer.js
+-->
+<link href="lib/maplibre-gl.css" rel="stylesheet">
+<script src="lib/maplibre-gl.js"></script>
+<script src="lib/deck.gl.min.js"></script>
+<script src="lib/mp4-muxer.js"></script>
+<style>
+  :root {
+    --panel-bg: rgba(18, 20, 26, 0.88);
+    --panel-fg: #e8eaf0;
+    --muted: #9aa0ad;
+    --accent: #ffbe3c;
+    --border: rgba(255, 255, 255, 0.12);
+  }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--panel-fg); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+
+  /* The map is always rendered at exactly 1920x1080 (the video size) and scaled to fit the window */
+  #stage { position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px; transform-origin: center; }
+  #map { position: absolute; inset: 0; }
+  #hud { position: absolute; left: 56px; bottom: 56px; pointer-events: none; text-shadow: 0 2px 12px rgba(0,0,0,.8); }
+  #hud .date { font-size: 64px; font-weight: 700; letter-spacing: -0.5px; }
+  #hud .sub { font-size: 30px; color: #cfd3dc; margin-top: 4px; }
+
+  #drop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 5; }
+  #drop div { padding: 28px 36px; border: 2px dashed rgba(255,255,255,.35); border-radius: 14px; background: rgba(0,0,0,.55); font-size: 18px; text-align: center; color: #cfd3dc; }
+  #drop.over div { border-color: var(--accent); color: #fff; }
+  #drop.hidden { display: none; }
+
+  #panel { position: fixed; top: 16px; left: 16px; width: 290px; padding: 14px; background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px; backdrop-filter: blur(6px); z-index: 10; }
+  #panel h1 { font-size: 15px; margin: 0 0 10px; }
+  #panel .row { display: flex; gap: 8px; margin-bottom: 10px; }
+  #panel button { flex: 1; padding: 7px 0; border: 1px solid var(--border); border-radius: 6px; background: rgba(255,255,255,.08); color: inherit; font: inherit; cursor: pointer; }
+  #panel button:hover:not(:disabled) { background: rgba(255,255,255,.16); }
+  #panel button:disabled { opacity: .45; cursor: default; }
+  #panel button.rec { color: #ff6b6b; }
+  #panel label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  #panel label span { color: var(--panel-fg); float: right; }
+  #panel input[type=range], #panel select { width: 100%; margin-top: 3px; }
+  #panel select { background: #222; color: inherit; border: 1px solid var(--border); border-radius: 5px; padding: 4px; }
+  #status { color: var(--muted); font-size: 12px; min-height: 1.4em; }
+  #panel.collapsed > :not(.head) { display: none; }
+  #panel .head { display: flex; justify-content: space-between; align-items: baseline; }
+  #panel .head button { flex: none; padding: 2px 8px; font-size: 12px; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="map"></div>
+  <div id="hud"><div class="date" id="hudDate"></div><div class="sub" id="hudSub"></div></div>
+</div>
+
+<div id="drop"><div>Drop your telemetry files here<br><small>.csv and .kml files, or combined-flights.kml</small></div></div>
+
+<div id="panel">
+  <div class="head"><h1>Flight history</h1><button id="collapse" title="Hide panel (H)">Hide</button></div>
+  <div class="row">
+    <button id="openFiles">Open files…</button>
+    <button id="openFolder">Open folder…</button>
+  </div>
+  <input id="filesInput" class="visually-hidden" type="file" multiple accept=".kml,.csv">
+  <input id="folderInput" class="visually-hidden" type="file" webkitdirectory>
+  <div class="row">
+    <button id="play">Play</button>
+    <button id="restart">Restart</button>
+    <button id="record" class="rec">● Record</button>
+  </div>
+  <label>Timeline <span id="clock">0.0 s</span>
+    <input id="scrub" type="range" min="0" max="1" step="0.01" value="0">
+  </label>
+  <label>Zoom-out per flight <span id="zoomVal"></span>
+    <input id="zoomSec" type="range" min="0.2" max="3" step="0.1" value="0.8">
+  </label>
+  <label>Trace per flight <span id="traceVal"></span>
+    <input id="traceSec" type="range" min="0.3" max="5" step="0.1" value="1.2">
+  </label>
+  <label>Basemap
+    <select id="basemap">
+      <option value="dark">Dark</option>
+      <option value="satellite">Satellite</option>
+      <option value="light">Light</option>
+    </select>
+  </label>
+  <label>Video
+    <select id="fps">
+      <option value="60">1920×1080, 60 fps</option>
+      <option value="30">1920×1080, 30 fps (renders faster)</option>
+    </select>
+  </label>
+  <div id="status">Loading…</div>
+</div>
+
+<script src="flight-animation.js"></script>
+</body>
+</html>
